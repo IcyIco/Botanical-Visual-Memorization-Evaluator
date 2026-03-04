@@ -1,0 +1,10 @@
+torch
+torchvision
+transformers
+lpips
+Pillow
+requests
+numpy
+scikit-image
+faiss-cpu
+streamlit
