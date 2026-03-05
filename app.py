@@ -2,7 +2,7 @@ import streamlit as st
 import numpy as np
 from utils import (
     load_image, extract_clip_image_embedding, extract_clip_text_embedding,
-    get_geometric_embeddings, calculate_lpips_distance, get_l2_distance, get_cosine_similarity,
+    get_geometric_variations, calculate_lpips_distance, get_l2_distance, get_cosine_similarity,
     get_clip_components, get_lpips_model
 )
 
@@ -10,7 +10,6 @@ st.set_page_config(page_title="PhytoTrace Eval", layout="wide")
 
 @st.cache_resource
 def init_models():
-    """Initializes models once to prevent Streamlit from reloading them on every interaction."""
     get_clip_components()
     get_lpips_model()
 
@@ -52,14 +51,19 @@ if img1 and img2:
     
     with st.spinner("Running Deep Inference..."):
         emb1 = extract_clip_image_embedding(img1)
-        variations_emb2 = get_geometric_embeddings(img2)
         
-        distances = [get_l2_distance(emb1, e_var) for e_var in variations_emb2]
-        best_l2 = min(distances)
-        best_emb2_idx = np.argmin(distances)
-        best_emb2 = variations_emb2[best_emb2_idx]
+        # Returns list of (transformed_image, embedding)
+        target_variations = get_geometric_variations(img2)
         
-        lpips_val = calculate_lpips_distance(img1, img2)
+        distances = [get_l2_distance(emb1, var[1]) for var in target_variations]
+        best_idx = np.argmin(distances)
+        
+        best_l2 = distances[best_idx]
+        best_emb2 = target_variations[best_idx][1]
+        aligned_img2 = target_variations[best_idx][0]
+        
+        # Crucial Fix: Calculate LPIPS using the spatially aligned variant
+        lpips_val = calculate_lpips_distance(img1, aligned_img2)
         
         alignment_score = "N/A"
         if text_prompt:

@@ -4,7 +4,7 @@ import pickle
 import faiss
 import numpy as np
 from utils import (
-    load_image, extract_clip_image_embedding, get_geometric_embeddings, 
+    load_image, extract_clip_image_embedding, get_geometric_variations, 
     calculate_lpips_distance, get_clip_components, get_lpips_model
 )
 
@@ -32,12 +32,15 @@ def build_index_if_needed():
             urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
             image_files.extend(urls)
 
+    if not image_files:
+        print("[WARNING] No images found in the search directory. Index build skipped.")
+        return
+
     print(f"      Total items to process: {len(image_files)}")
 
     embeddings_list = []
     valid_files = []
     
-    # Pre-initialize model to avoid logs during the loop
     get_clip_components()
     
     for i, fpath in enumerate(image_files):
@@ -49,6 +52,10 @@ def build_index_if_needed():
         if i % 10 == 0: 
             print(f"      Processed {i} items...", end="\r")
             
+    if not embeddings_list:
+        print("\n[WARNING] Failed to extract features from any images.")
+        return
+
     vectors = np.vstack(embeddings_list)
     index = faiss.IndexFlatL2(512)
     index.add(vectors)
@@ -77,7 +84,9 @@ def run_batch_scan():
     if not target_img: 
         return
     
-    query_vectors = np.vstack(get_geometric_embeddings(target_img))
+    # Retrieves both transformed images and their embeddings
+    target_variations = get_geometric_variations(target_img)
+    query_vectors = np.vstack([var[1] for var in target_variations])
     
     print(f"[INFO] Scanning against target: {os.path.basename(TARGET_IMAGE_PATH)}")
     
@@ -89,10 +98,12 @@ def run_batch_scan():
     print(f"{'FILE':<35} | {'L2 DIST':<7} | {'LPIPS':<6} | {'RESULT'}")
     print("-" * 65)
 
-    # Pre-initialize LPIPS model for the evaluation loop
     get_lpips_model()
 
     for variant_idx, (distances, indices) in enumerate(zip(D, I)):
+        # Extract the specific spatially transformed image that triggered this query
+        aligned_target_img = target_variations[variant_idx][0]
+
         for dist, idx in zip(distances, indices):
             if idx == -1: continue
             
@@ -111,7 +122,8 @@ def run_batch_scan():
                 if candidate_img is None:
                     continue
 
-                lpips_val = calculate_lpips_distance(target_img, candidate_img)
+                # Use the spatially aligned target image for accurate VGG comparison
+                lpips_val = calculate_lpips_distance(aligned_target_img, candidate_img)
                 
                 status = "PASS"
                 if lpips_val <= LPIPS_THRESHOLD:

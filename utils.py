@@ -4,14 +4,13 @@ import numpy as np
 import lpips
 from PIL import Image, ImageOps
 from io import BytesIO
-from typing import Union, Optional, List
+from typing import Union, Optional, List, Tuple
 from transformers import CLIPProcessor, CLIPModel
 from torchvision import transforms
 
 print("[INFO] Setting up PyTorch AI Engine...")
 device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 
-# Lazy loading variables to prevent Streamlit memory leaks
 _CLIP_MODEL = None
 _CLIP_PROCESSOR = None
 _LPIPS_MODEL = None
@@ -35,7 +34,6 @@ def get_lpips_model():
     return _LPIPS_MODEL
 
 def load_image(source: Union[str, BytesIO]) -> Optional[Image.Image]:
-    """Loads an image and ensures it is in 3-channel RGB format."""
     try:
         if hasattr(source, "read"):
             img = Image.open(source)
@@ -51,7 +49,6 @@ def load_image(source: Union[str, BytesIO]) -> Optional[Image.Image]:
         return None
 
 def extract_clip_image_embedding(image: Image.Image) -> np.ndarray:
-    """Extracts 512-D visual embedding with L2 normalization."""
     processor, model = get_clip_components()
     inputs = processor(images=image, return_tensors="pt").to(device)
     with torch.no_grad():
@@ -60,7 +57,6 @@ def extract_clip_image_embedding(image: Image.Image) -> np.ndarray:
     return features.cpu().numpy().astype('float32')[0]
 
 def extract_clip_text_embedding(text: str) -> np.ndarray:
-    """Extracts 512-D textual embedding for NLP alignment."""
     processor, model = get_clip_components()
     inputs = processor(text=text, return_tensors="pt", padding=True).to(device)
     with torch.no_grad():
@@ -68,17 +64,27 @@ def extract_clip_text_embedding(text: str) -> np.ndarray:
     features = features / features.norm(p=2, dim=-1, keepdim=True)
     return features.cpu().numpy().astype('float32')[0]
 
-def get_geometric_embeddings(image: Image.Image) -> List[np.ndarray]:
-    """Extracts embeddings for geometric variations to boost recall robustness."""
-    embeddings = [
-        extract_clip_image_embedding(image),
-        extract_clip_image_embedding(ImageOps.mirror(image))
-    ]
+def get_geometric_variations(image: Image.Image) -> List[Tuple[Image.Image, np.ndarray]]:
+    """
+    Returns a list of tuples: (transformed_image, embedding)
+    Ensures spatial alignment for subsequent LPIPS calculations.
+    """
+    variations = []
+    
+    # Original
+    variations.append((image, extract_clip_image_embedding(image)))
+    
+    # Flip
+    flipped = ImageOps.mirror(image)
+    variations.append((flipped, extract_clip_image_embedding(flipped)))
+    
+    # Rotations
     for angle in [90, 180, 270]:
-        embeddings.append(extract_clip_image_embedding(image.rotate(angle, expand=True)))
-    return embeddings
+        rotated = image.rotate(angle, expand=True)
+        variations.append((rotated, extract_clip_image_embedding(rotated)))
+        
+    return variations
 
-# Standardized PyTorch transforms for safe tensor operations
 lpips_transform = transforms.Compose([
     transforms.Resize((256, 256)),
     transforms.ToTensor(),
@@ -86,7 +92,6 @@ lpips_transform = transforms.Compose([
 ])
 
 def calculate_lpips_distance(img1: Image.Image, img2: Image.Image) -> float:
-    """Calculates perceptual distance using deep neural networks."""
     lpips_model = get_lpips_model()
     t1 = lpips_transform(img1).unsqueeze(0).to(device)
     t2 = lpips_transform(img2).unsqueeze(0).to(device)
